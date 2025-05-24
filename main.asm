@@ -11,11 +11,9 @@ start:
 
 game:
 clr_scr:
-    mov cl, 0                       ; clear to black
     mov di, screen.w * screen.h     ; screen size
-
     .loop:
-    mov [es:di], cl
+    mov byte [es:di], 0
     dec di
     jnz .loop
 
@@ -38,29 +36,139 @@ draw_players:
     mov cx, player_base.size
     call draw_box
 
+update_player:
+    in al, keyboard.port                     ; read the keyboard input
+    cmp al, keyboard.start
+    jne .check_movement
+    mov byte [ball.moving], 1
+    jmp .end
+    .check_movement:
+        cmp al, keyboard.up
+        je .move_up
+        cmp al, keyboard.down
+        je .move_down
+        jmp .end
+    
+        .move_up:
+            mov ax, [player1.y]
+            test ax, ax
+            jz .end
+            dec word [player1.y]
+            jmp .end
+        .move_down:
+            mov ax, [player1.y]
+            add ax, player_base.h
+            cmp ax, screen.h
+            je .end
+            inc word [player1.y]
+    .end:
+
+update_ai:
+    mov cx, [ball.x]
+    cmp cx, player2.reach           ; check if ball is close enough that paddle should move
+    jle .end
+    mov cx, [player2.y]             ; check if ball is below or above the paddle
+    cmp cx, [ball.y]                
+    jg .move_up
+    add cx, [player_base.h]
+    cmp cx, [ball.y]                ; account for the size of the paddle when checking if below
+    jl .move_down
+    jmp .end
+
+    .move_up:
+        dec word [player2.y]
+        jmp .end
+    .move_down:
+        inc word [player2.y]
+    .end:
+
+    
+
+update_ball:
+    mov al, [ball.moving]
+    test al, al
+    jz end_ball_update
+
+update_x:
+    mov ax, [ball.x]
+    mov bx, [ball.x_dir]
+    add ax, bx                      ; apply speed
+    jz score.ai
+    
+    cmp ax, screen.w
+    je score.player
+
+    mov dx, ax
+    .collide_p1:
+        
+        add ax, player_base.w
+        cmp ax, player1.x
+        jne .collide_p2
+        mov cx, [player1.y]
+        cmp cx, [ball.y]
+        jg .collide_p2
+        add cx, player_base.h
+        cmp cx, [ball.y]
+        jge .bounce
+    .collide_p2:
+        mov ax, dx
+        add ax, ball.w
+        cmp ax, player2.x
+        jne .end
+        mov cx, [player2.y]
+        cmp cx, [ball.y]
+        jg .end
+        add cx, player_base.h
+        cmp cx, [ball.y]
+        jl .end
+    
+    .bounce:
+        neg bx
+        mov [ball.x_dir], bx
+    .end:
+        mov [ball.x], dx
+
+update_y:
+    mov ax, [ball.y]                ; load y into ax
+    mov bx, [ball.y_dir]            ; and speed into bx
+    add ax, bx                      ; apply the speed
+    jz .bounce                      ; if result of addition is 0, bounce because we hit the top
+    cmp ax, screen.h
+    jne .end
+    .bounce:
+        neg bx                      ; just flip the speed
+        mov [ball.y_dir], bx
+    .end:
+        mov [ball.y], ax
+    end_ball_update:
+
 frame_delay:
     mov ah, 0x86                    ; elapsed time wait call
     mov cx, 0                       ; delay
     mov dx, screen.frame_delay      ; delay
     int 0x15                        ; call the delay
     
+
     jmp game
 .spin:
     jmp .spin                       ; Spin forever
 
+score:
+    .player:
+        inc byte [player1.score]
+        jmp .end
+    .ai:
+        inc byte [player2.score]
+    .end:
+        mov byte [ball.moving], 0 
+        mov word [ball.x], ball.start_x
+        mov word [ball.y], ball.start_y
+        neg word [ball.x_dir]
+    jmp frame_delay
 
-; plot a pixel with ax = x, bx = y, dl = color
-plot:
-    push bx
-    imul bx, screen.w               ; i = y * width + x
-    mov di, ax
-    add di, bx                     
-    mov [es:di], dl                 ; move at di value dl using the offset
-    pop bx
-    ret
+
     
 ; ax = x, bx = y, dl = color, ch - w, cl - h
-; used player_base data for width and height
 draw_box:
     mov [draw_box_data], cx
     xor cx, cx
@@ -70,7 +178,14 @@ draw_box:
         push cx
         mov cl, [draw_box_data.h]
         .loop_vertical:
-            call plot
+            ; plot a pixel with ax = x, bx = y, dl = color
+            .plot:
+                push bx
+                imul bx, screen.w               ; i = y * width + x
+                mov di, ax
+                add di, bx                     
+                mov [es:di], dl                 ; move at di value dl using the offset
+                pop bx
             inc bx
             loop .loop_vertical
         pop cx
@@ -79,9 +194,9 @@ draw_box:
     loop .loop_horizontal
     ret
 
-draw_box_data:
-    .w db 0
-    .h db 0
+draw_box_data:                              ; variables used during the drawing process
+    .w db 0                                 ; backup of the width
+    .h db 0                                 ; backup of the height
 
 
 screen:
@@ -100,8 +215,13 @@ ball:
     .w equ 4
     .h equ 4
     .size equ (.h << 8) | (.w)              ; calculate the full size in a way that can put into cx
-    .x dw (screen.w - ball.w) / 2
-    .y dw (screen.h - ball.h) / 2
+    .x dw .start_x
+    .y dw .start_y
+    .start_x equ (screen.w - ball.w) / 2
+    .start_y equ (screen.h - ball.h) / 2
+    .y_dir dw 1
+    .x_dir dw 1
+    .moving db 0
 
 
 
@@ -114,7 +234,14 @@ player2:
     .x equ screen.w - player_base.dist_x
     .y dw (screen.h - player_base.h) / 2
     .score db 0
+    .reach equ 200
 
+keyboard:
+    .port equ 0x60              ; keyboard port 
+    ; these are scan codes for the keys
+    .up equ 0x11                ; w
+    .down equ 0x1f              ; s
+    .start equ 0x39             ; space
 
 padding:
         %assign compiled_size $-$$
