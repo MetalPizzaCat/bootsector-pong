@@ -1,77 +1,124 @@
-org 0x7c00                      ; The entry address to copy the code to;
-                                ; this changes when setting it to run from boot sector
+org 0x7c00                          ; The entry address to copy the code to;
+                                    ; this changes when setting it to run from boot sector
 
 start:
-    mov ax, 0x0002              ; Set 80-25 text mode
+
+    mov ax, 0x13                    ; enable 320 x 200 x 8 video mode
     int 0x10
 
-    mov ax, 0xb800              ; Segment for the video data
+    mov ax, screen.address          ; set the video mem address
     mov es, ax
-    cld
 
-    ; Game title
-    mov ah, 0x67                ; Background: brown; Foreground: Light gray
-    mov bp, title_string        ; Copying the address to the text
-    mov cx, 62                  ; 62 => (0, 31)
-    call print_string
+game:
+clr_scr:
+    mov cl, 0                       ; clear to black
+    mov di, screen.w * screen.h     ; screen size
 
-    push 0x3800
-    push 0x1125
-    push 44
-    push 160 * 5
+    .loop:
+    mov [es:di], cl
+    dec di
+    jnz .loop
+
+draw_ball:
+    mov ax, [ball.x]                
+    mov bx, [ball.y]
+    mov dl, 15
+    mov cx, ball.size
     call draw_box
-exit:
-    int 0x20
+draw_players:
+    mov ax, player1.x
+    mov bx, [player1.y]
+    mov dl, 14
+    mov cx, player_base.size
+    call draw_box
+
+    mov ax, player2.x
+    mov bx, [player2.y]
+    mov dl, 13
+    mov cx, player_base.size
+    call draw_box
+
+frame_delay:
+    mov ah, 0x86                    ; elapsed time wait call
+    mov cx, 0                       ; delay
+    mov dx, screen.frame_delay      ; delay
+    int 0x15                        ; call the delay
+    
+    jmp game
+.spin:
+    jmp .spin                       ; Spin forever
 
 
-;
-; Draw box function
-; Params:   [bp+2] - row offset
-;           [bp+4] - column offset
-;           [bp+6] - box dimensions
-;           [bp+8] - char/Color
-;
+; plot a pixel with ax = x, bx = y, dl = color
+plot:
+    push bx
+    imul bx, screen.w               ; i = y * width + x
+    mov di, ax
+    add di, bx                     
+    mov [es:di], dl                 ; move at di value dl using the offset
+    pop bx
+    ret
+    
+; ax = x, bx = y, dl = color, ch - w, cl - h
+; used player_base data for width and height
 draw_box:
-    mov bp, sp                      ; Store the base of the stack, to get arguments
-    xor di, di                      ; Sets DI to screen origin
-    add di, [bp+2]                  ; Adds the row offset to DI
-
-    mov dx, [bp+6]                  ; Copy dimensions of the box
-    mov ax, [bp+8]                  ; Copy the char/color to print
-    mov bl, dh                      ; Get the height of the box
-
-    xor ch, ch                      ; Resets CX
-    mov cl, dl                      ; Copy the width of the box
-    add di, [bp+4]                  ; Adds the line offset to DI
-    rep stosw
-
-    add word [bp+2], 160            ; Add a line (180 bytes) to offset
-    sub byte [bp+7], 0x01           ; Remove one line of height - it's 0x0100 because height is stored in the msb
-    mov cx, [bp+6]                  ; Copy the size of the box to test
-    cmp ch, 0                       ; Test the height of the box
-    jnz draw_box                    ; If not zero, draw the rest of the box
+    mov [draw_box_data], cx
+    xor cx, cx
+    mov cl, [draw_box_data.w]
+    .loop_horizontal:
+        push bx
+        push cx
+        mov cl, [draw_box_data.h]
+        .loop_vertical:
+            call plot
+            inc bx
+            loop .loop_vertical
+        pop cx
+        inc ax
+        pop bx
+    loop .loop_horizontal
     ret
 
+draw_box_data:
+    .w db 0
+    .h db 0
 
-;
-; Print string function
-; Params:   AH - background/foreground color
-;           BP - string addr
-;           CX - position/offset
-;
-print_string:
-    mov di, cx                      ; Adds offset to DI
-    mov al, byte [bp]               ; Copies the char to AL (AH already contains color data)
-    cmp al, 0                       ; If the char is zero, string finished
-    jz _0                           ; ... return
-    stosw
-    add cx, 2                       ; Adds more 2 bytes the offset
-    inc bp                          ; Increments the string pointer
-    jmp print_string                ; Repeats the rest of the string
-_0:
-    ret
 
-title_string:       db " r e t r o 2 0 4 8 ", 0
+screen:
+    .address equ 0xa000
+    .w equ 320
+    .h equ 200
+    .frame_delay equ 8192
 
-times 510-($-$$) db 0x4f
+player_base:
+    .w equ 4
+    .h equ 40
+    .size equ (.h << 8) | (.w) 
+    .dist_x equ 20
+
+ball:
+    .w equ 4
+    .h equ 4
+    .size equ (.h << 8) | (.w)              ; calculate the full size in a way that can put into cx
+    .x dw (screen.w - ball.w) / 2
+    .y dw (screen.h - ball.h) / 2
+
+
+
+player1:
+    .x equ player_base.dist_x
+    .y dw (screen.h - player_base.h) / 2
+    .score db 0
+
+player2:
+    .x equ screen.w - player_base.dist_x
+    .y dw (screen.h - player_base.h) / 2
+    .score db 0
+
+
+padding:
+        %assign compiled_size $-$$
+        %warning Compiled size: compiled_size bytes
+        
+times 510-(compiled_size) db 0x4f
 db 0x55, 0xaa                   ; bootable signature
