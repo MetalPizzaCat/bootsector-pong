@@ -26,15 +26,29 @@ draw_ball:
 draw_players:
     mov ax, player1.x
     mov bx, [player1.y]
-    mov dl, 14
+    mov dl, player1.color
     mov cx, player_base.size
     call draw_box
 
     mov ax, player2.x
     mov bx, [player2.y]
-    mov dl, 13
+    mov dl, player2.color
     mov cx, player_base.size
     call draw_box
+
+draw_scores:
+    mov dx, player1.score_pos
+    mov al, [player1.score]
+    add al, '0'
+    mov bl, player1.color
+    call plot_char
+
+    mov dx, player2.score_pos
+    mov al, [player2.score]
+    add al, '0'
+    mov bl, player2.color
+    call plot_char
+
 
 update_player:
     in al, keyboard.port                     ; read the keyboard input
@@ -70,7 +84,7 @@ update_ai:
     mov cx, [player2.y]             ; check if ball is below or above the paddle
     cmp cx, [ball.y]                
     jg .move_up
-    add cx, [player_base.h]
+    add cx, player_base.h
     cmp cx, [ball.y]                ; account for the size of the paddle when checking if below
     jl .move_down
     jmp .end
@@ -93,38 +107,36 @@ update_x:
     mov ax, [ball.x]
     mov bx, [ball.x_dir]
     add ax, bx                      ; apply speed
-    jz score.ai
+    jz score.ai                     ; if it ends up being 0, we consider it touching on left side
     
-    cmp ax, screen.w
+    cmp ax, screen.w                ; check if it reached right side of the screen
     je score.player
 
-    mov dx, ax
+    mov dx, ax                      ; save ax value, because we will be modifying it
     .collide_p1:
-        
-        add ax, player_base.w
+        sub ax, player_base.w       ; subtract paddle width from ball position to account for paddle width
         cmp ax, player1.x
-        jne .collide_p2
-        mov cx, [player1.y]
+        jne .collide_p2             ; if it doesn't touch, we ignore
+        mov cx, [player1.y]         ; check if ball is above the paddle
         cmp cx, [ball.y]
         jg .collide_p2
-        add cx, player_base.h
+        add cx, player_base.h       ; check if ball is below the paddle
         cmp cx, [ball.y]
         jge .bounce
     .collide_p2:
-        mov ax, dx
-        add ax, ball.w
+        mov ax, dx                  ; restore ball pos 
+        add ax, ball.w              ; add ball width to check ball right side collision
         cmp ax, player2.x
         jne .end
-        mov cx, [player2.y]
+        mov cx, [player2.y]         ; check if ball is above the paddle
         cmp cx, [ball.y]
         jg .end
-        add cx, player_base.h
+        add cx, player_base.h       ; and check if below the paddle
         cmp cx, [ball.y]
         jl .end
     
     .bounce:
-        neg bx
-        mov [ball.x_dir], bx
+        neg word [ball.x_dir]
     .end:
         mov [ball.x], dx
 
@@ -167,6 +179,22 @@ score:
     jmp frame_delay
 
 
+; al - char
+; bl - color
+; dl - x
+; dh - y
+plot_char:
+    mov bh, 0                   ; page zero
+    push ax
+    push bx
+    mov ax, 0x200               ; move cursor
+    int 0x10
+    pop bx
+    pop ax
+    mov ah, 0xa                 ; plot character
+    mov cx, 1                   ; repeat once
+    int 0x10
+    ret
     
 ; ax = x, bx = y, dl = color, ch - w, cl - h
 draw_box:
@@ -229,12 +257,20 @@ player1:
     .x equ player_base.dist_x
     .y dw (screen.h - player_base.h) / 2
     .score db 0
+    .score_x equ 1
+    .score_y equ 3
+    .score_pos equ (.score_y << 8) | .score_x
+    .color equ 14
 
 player2:
     .x equ screen.w - player_base.dist_x
     .y dw (screen.h - player_base.h) / 2
     .score db 0
     .reach equ 200
+    .score_x equ 38
+    .score_y equ 3
+    .score_pos equ (.score_y << 8) | .score_x
+    .color equ 13
 
 keyboard:
     .port equ 0x60              ; keyboard port 
