@@ -13,7 +13,7 @@ game:
 clr_scr:
     mov di, screen.w * screen.h     ; screen size
     .loop:
-    mov byte [es:di], 0
+    mov byte [es:di], 0             ; write black pixels
     dec di
     jnz .loop
 
@@ -45,16 +45,41 @@ draw_scores:
 
     mov dx, player2.score_pos
     mov al, [player2.score]
-    add al, '0'
+    add al, '0'                                     ; adding '0' will convert integer in range 0-9 to an ascii value
+                                                    ; note that this will print nonsense with values out of that range
     mov bl, player2.color
     call plot_char
 
+show_game_over:
+    mov al, [end_game.is_game_over]
+    test al, al                                    ; check if is_game_over == false
+    jz .end
+        mov di, end_game.msg
+        mov cx, end_game.size
+        mov dl, end_game.x
+        mov dh, end_game.y
+        mov bl, 12                                  ; use color #12 cause i felt like it
+        .print:
+            mov al, [di]                            ; load character in string. al = *str
+            push cx                                 ; plot char uses cx so we need to preserve it
+            call plot_char
+            pop cx
+            inc dl                                  ; x++
+            inc di                                  ; str++
+            loop .print
+        .check_reset:
+            in al, keyboard.port                    ; read the keyboard input
+            cmp al, keyboard.start                  ; check if space is currently held and if so, run the reset program
+            je score_reset
+        jmp frame_delay
+    .end:
+
 
 update_player:
-    in al, keyboard.port                     ; read the keyboard input
-    cmp al, keyboard.start
+    in al, keyboard.port                            ; read the keyboard input
+    cmp al, keyboard.start                          ; check if space is held 
     jne .check_movement
-    mov byte [ball.moving], 1
+    mov byte [ball.moving], 1                       ; set ball.moving = true, does nothing if ball is moving
     jmp .end
     .check_movement:
         cmp al, keyboard.up
@@ -65,27 +90,27 @@ update_player:
     
         .move_up:
             mov ax, [player1.y]
-            test ax, ax
+            test ax, ax                             ; test if player1.y == 0, if true, don't move
             jz .end
-            dec word [player1.y]
+            dec word [player1.y]                    ; otherwise player1.y -= 1, 0 is top in this case
             jmp .end
         .move_down:
-            mov ax, [player1.y]
-            add ax, player_base.h
-            cmp ax, screen.h
+            mov ax, [player1.y]                     ; load y again
+            add ax, player_base.h                   ; but also add height of the paddle
+            cmp ax, screen.h                        ; check if bottom of the paddle touches the end of the screen
             je .end
-            inc word [player1.y]
+            inc word [player1.y]                    ; if doesn't, increase y
     .end:
 
 update_ai:
     mov cx, [ball.x]
-    cmp cx, player2.reach           ; check if ball is close enough that paddle should move
+    cmp cx, player2.reach                           ; check if ball is close enough that paddle should move
     jle .end
-    mov cx, [player2.y]             ; check if ball is below or above the paddle
+    mov cx, [player2.y]                             ; check if ball is below or above the paddle
     cmp cx, [ball.y]                
     jg .move_up
     add cx, player_base.h
-    cmp cx, [ball.y]                ; account for the size of the paddle when checking if below
+    cmp cx, [ball.y]                                ; account for the size of the paddle when checking if below
     jl .move_down
     jmp .end
 
@@ -105,8 +130,7 @@ update_ball:
 
 update_x:
     mov ax, [ball.x]
-    mov bx, [ball.x_dir]
-    add ax, bx                      ; apply speed
+    add ax, [ball.x_dir]            ; apply speed
     jz score.ai                     ; if it ends up being 0, we consider it touching on left side
     
     cmp ax, screen.w                ; check if it reached right side of the screen
@@ -142,17 +166,16 @@ update_x:
 
 update_y:
     mov ax, [ball.y]                ; load y into ax
-    mov bx, [ball.y_dir]            ; and speed into bx
-    add ax, bx                      ; apply the speed
+    add ax,  [ball.y_dir]                      ; apply the speed
     jz .bounce                      ; if result of addition is 0, bounce because we hit the top
     cmp ax, screen.h
     jne .end
-    .bounce:
-        neg bx                      ; just flip the speed
-        mov [ball.y_dir], bx
+    .bounce:   
+        neg word [ball.y_dir]       ; just flip the speed
     .end:
         mov [ball.y], ax
     end_ball_update:
+
 
 frame_delay:
     mov ah, 0x86                    ; elapsed time wait call
@@ -167,17 +190,32 @@ frame_delay:
 
 score:
     .player:
-        inc byte [player1.score]
-        jmp .end
+        inc byte [player1.score]                           
+        jmp .check_score
     .ai:
         inc byte [player2.score]
+    .check_score:
+        cmp byte [player1.score], end_game.max_score
+        jne .check_score_p1
+        mov byte [end_game.is_game_over], 1
+    .check_score_p1:
+        cmp byte [player2.score], end_game.max_score
+        jne .end
+        mov byte [end_game.is_game_over], 1
     .end:
         mov byte [ball.moving], 0 
         mov word [ball.x], ball.start_x
         mov word [ball.y], ball.start_y
         neg word [ball.x_dir]
+        
     jmp frame_delay
 
+; reset the current score and disable the game end screen
+score_reset:
+    mov byte [player1.score], 0
+    mov byte [player2.score], 0
+    mov byte [end_game.is_game_over], 0
+    jmp score.end
 
 ; al - char
 ; bl - color
@@ -195,7 +233,8 @@ plot_char:
     mov cx, 1                   ; repeat once
     int 0x10
     ret
-    
+
+; single function that can draw a filled box of a given color
 ; ax = x, bx = y, dl = color, ch - w, cl - h
 draw_box:
     mov [draw_box_data], cx
@@ -226,6 +265,14 @@ draw_box_data:                              ; variables used during the drawing 
     .w db 0                                 ; backup of the width
     .h db 0                                 ; backup of the height
 
+end_game:
+    .msg db "Game over!"
+    .size equ $ - .msg
+    .x equ (40 - .size) / 2
+    .y equ 12
+    .c equ 10
+    .is_game_over db 0
+    .max_score equ 9
 
 screen:
     .address equ 0xa000
@@ -242,11 +289,12 @@ player_base:
 ball:
     .w equ 4
     .h equ 4
-    .size equ (.h << 8) | (.w)              ; calculate the full size in a way that can put into cx
+    .size equ (.h << 8) | (.w)                          ; calculate the full size in a way that can put into cx
     .x dw .start_x
     .y dw .start_y
     .start_x equ (screen.w - ball.w) / 2
     .start_y equ (screen.h - ball.h) / 2
+    .start_pos equ (.start_x << 8) | .start_y
     .y_dir dw 1
     .x_dir dw 1
     .moving db 0
@@ -266,10 +314,10 @@ player2:
     .x equ screen.w - player_base.dist_x
     .y dw (screen.h - player_base.h) / 2
     .score db 0
-    .reach equ 200
+    .reach equ 180
     .score_x equ 38
     .score_y equ 3
-    .score_pos equ (.score_y << 8) | .score_x
+    .score_pos equ (.score_y << 8) | .score_x                   ; combining values into one will make it easier to load both in 16bit register in one instruction
     .color equ 13
 
 keyboard:
