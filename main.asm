@@ -215,6 +215,8 @@ score_reset:
     mov byte [player1.score], 0
     mov byte [player2.score], 0
     mov byte [end_game.is_game_over], 0
+    mov word [player1.y], player_base.start_y
+    mov word [player2.y], player_base.start_y
     jmp score.end
 
 ; al - char
@@ -236,34 +238,25 @@ plot_char:
 
 ; single function that can draw a filled box of a given color
 ; ax = x, bx = y, dl = color, ch - w, cl - h
-draw_box:
-    mov [draw_box_data], cx
-    xor cx, cx
-    mov cl, [draw_box_data.w]
-    .loop_horizontal:
-        push bx
-        push cx
-        mov cl, [draw_box_data.h]
-        .loop_vertical:
-            ; plot a pixel with ax = x, bx = y, dl = color
-            .plot:
-                push bx
-                imul bx, screen.w               ; i = y * width + x
-                mov di, ax
-                add di, bx                     
-                mov [es:di], dl                 ; move at di value dl using the offset
-                pop bx
-            inc bx
-            loop .loop_vertical
-        pop cx
-        inc ax
-        pop bx
-    loop .loop_horizontal
+draw_box: 
+    mov dh, cl                                      ; preserve width because it resets each line
+    mov di, bx
+    imul di, screen.w
+    add di, ax                                      ; calculate starting x as x + y * width
+    .vert:
+        mov cl, dh
+        push di                                     ; save to know what value we start at
+        .hor:
+            mov [es:di], dl                         ; write the pixel data
+            inc di                                  ; advance graphics
+            dec cl                                  ; reduce counter
+        jnz .hor
+    pop di                                          ; restore graphics pointer
+    add di, screen.w                                ; y++, to avoid recalculating whole coordinate
+    dec ch
+    jnz .vert
+    .end:
     ret
-
-draw_box_data:                              ; variables used during the drawing process
-    .w db 0                                 ; backup of the width
-    .h db 0                                 ; backup of the height
 
 end_game:
     .msg db "Game over!"
@@ -285,6 +278,7 @@ player_base:
     .h equ 40
     .size equ (.h << 8) | (.w) 
     .dist_x equ 20
+    .start_y equ (screen.h - player_base.h) / 2
 
 ball:
     .w equ 4
@@ -303,7 +297,7 @@ ball:
 
 player1:
     .x equ player_base.dist_x
-    .y dw (screen.h - player_base.h) / 2
+    .y dw player_base.start_y
     .score db 0
     .score_x equ 1
     .score_y equ 3
@@ -312,7 +306,7 @@ player1:
 
 player2:
     .x equ screen.w - player_base.dist_x
-    .y dw (screen.h - player_base.h) / 2
+    .y dw player_base.start_y
     .score db 0
     .reach equ 180
     .score_x equ 38
